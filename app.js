@@ -94,10 +94,11 @@ app.post('/api/schedules/save', (req, res) => {
         }
     });
 });
+app.use(express.static(path.join(process.cwd(), 'public')));
 
-// 萬用路由導向前端
+// 萬用路由導向內建的 index.html
 app.get('*', (req, res) => {
-  res.sendFile(path.join(process.cwd(), '../client/dist/index.html'));
+  res.sendFile(path.join(process.cwd(), 'public/index.html'));
 });
 
 export default app;

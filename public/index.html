@@ -1,13 +1,391 @@
-<html>
-
+<!DOCTYPE html>
+<html lang="zh-TW">
 <head>
-  <title>Express</title>
-  <link rel="stylesheet" href="/stylesheets/style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>校園空堂媒合器</title>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            background-color: #f4f6f9;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+            margin-bottom: 30px;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #ecf0f1;
+        }
+        .user-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        input, select, button {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+        }
+        input { flex: 1; }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover { background-color: #2980b9; }
+        button.danger { background-color: #e74c3c; }
+        button.danger:hover { background-color: #c0392b; }
+        button.success { background-color: #2ecc71; }
+        button.success:hover { background-color: #27ae60; }
+        
+        .user-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .user-badge {
+            background: #ecf0f1;
+            padding: 8px 12px;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .delete-btn {
+            color: #e74c3c;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            background: white;
+        }
+        th, td {
+            border: 1px solid #bdc3c7;
+            padding: 12px;
+            text-align: center;
+        }
+        th { background-color: #34495e; color: white; }
+        
+        /* 狀態顏色 */
+        td.selectable { cursor: pointer; transition: background 0.1s; }
+        td.free { background-color: #2ecc71; color: white; } /* 綠色代表空堂 */
+        td.busy { background-color: #e74c3c; color: white; } /* 紅色代表有課 */
+        
+        .hint {
+            font-size: 14px;
+            color: #7f8c8d;
+            margin-top: 5px;
+        }
+    </style>
 </head>
-
 <body>
-  <h1>Express</h1>
-  <p>Welcome to Express</p>
-</body>
 
+<div class="container">
+    <h1>🏫 校園空堂媒合器</h1>
+
+    <div class="section">
+        <h2>👥 成員管理</h2>
+        <div class="user-controls">
+            <input type="text" id="username-input" placeholder="請輸入新成員姓名...">
+            <button onclick="addUser()">新增成員</button>
+        </div>
+        <div class="user-list" id="user-list-container"></div>
+    </div>
+
+    <div class="section">
+        <h2>📅 空堂狀況 (切換檢視/編輯)</h2>
+        <div style="margin-bottom: 15px;">
+            <label for="user-select"><strong>選擇當前成員：</strong></label>
+            <select id="user-select" onchange="loadUserSchedule()">
+                <option value="">-- 請選擇成員或切換至總覽 --</option>
+            </select>
+            <button class="success" id="save-btn" onclick="saveSchedule()" style="display:none; margin-left: 10px;">儲存當前課表</button>
+        </div>
+        <p class="hint" id="table-hint">提示：切換至特定成員後，點擊表格格子可切換「空堂(綠)」或「有課(紅)」狀態。</p>
+
+        <table id="schedule-table">
+            <thead>
+                <tr>
+                    <th>節次 \ 星期</th>
+                    <th>星期一</th>
+                    <th>星期二</th>
+                    <th>星期三</th>
+                    <th>星期四</th>
+                    <th>星期五</th>
+                </tr>
+            </thead>
+            <tbody id="schedule-tbody">
+                </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    // 預設定義 4 節課，5 個工作天
+    const PERIODS = 4;
+    const DAYS = 5;
+    
+    let allUsers = [];
+    let allSchedules = {}; // 格式: { userId: { day: { period: is_busy } } }
+    let currentLocalSchedule = {}; // 當前選中用戶在前端暫存的編輯課表狀態
+
+    // 網頁載入時初始化
+    window.onload = function() {
+        renderTable();
+        refreshData();
+    };
+
+    // 渲染課表基礎結構
+    function renderTable() {
+        const tbody = document.getElementById('schedule-tbody');
+        tbody.innerHTML = '';
+        
+        for (let p = 1; p <= PERIODS; p++) {
+            let tr = document.createElement('tr');
+            let th = document.createElement('th');
+            th.innerText = `第 ${p} 節`;
+            tr.appendChild(th);
+            
+            for (let d = 1; d <= DAYS; d++) {
+                let td = document.createElement('td');
+                td.id = `cell-${d}-${p}`;
+                td.className = 'selectable free';
+                td.innerText = '空堂';
+                td.onclick = () => toggleCell(d, p);
+                tr.appendChild(td);
+            }
+            tbody.appendChild(tr);
+        }
+    }
+
+    // 從後端 API 重新抓取所有最新資料
+    async function refreshData() {
+        try {
+            // 1. 抓成員
+            const userRes = await fetch('/api/users');
+            allUsers = await userRes.json();
+            
+            // 2. 抓全部課表
+            const scheduleRes = await fetch('/api/schedules');
+            allSchedules = await scheduleRes.json();
+            
+            updateUserUI();
+            loadUserSchedule(); // 重新渲染表格內容
+        } catch (err) {
+            console.error('抓取資料失敗:', err);
+        }
+    }
+
+    // 更新成員名單的 UI 顯示與下拉選單
+    function updateUserUI() {
+        const listContainer = document.getElementById('user-list-container');
+        const select = document.getElementById('user-select');
+        
+        // 紀錄當前選取的值
+        const currentSelected = select.value;
+        
+        listContainer.innerHTML = '';
+        select.innerHTML = '<option value="">📊 所有人空堂總覽 (顏色越紅代表越多人在忙)</option>';
+        
+        allUsers.forEach(user => {
+            // 渲染成員標籤
+            let badge = document.createElement('div');
+            badge.className = 'user-badge';
+            badge.innerHTML = `${user.name} <span class="delete-btn" onclick="deleteUser(${user.id})">×</span>`;
+            listContainer.appendChild(badge);
+            
+            // 填充選單
+            let opt = document.createElement('option');
+            opt.value = user.id;
+            opt.innerText = user.name;
+            select.appendChild(opt);
+        });
+        
+        select.value = currentSelected;
+    }
+
+    // 新增成員
+    async function addUser() {
+        const input = document.getElementById('username-input');
+        const name = input.value.trim();
+        if (!name) return alert('請輸入姓名');
+        
+        try {
+            const res = await fetch('/api/users', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+            if (res.ok) {
+                input.value = '';
+                refreshData();
+            } else {
+                const data = await res.json();
+                alert(data.error || '新增失敗');
+            }
+        } catch (err) {
+            alert('連線失敗');
+        }
+    }
+
+    // 刪除成員
+    async function deleteUser(id) {
+        if (!confirm('確定要刪除該成員嗎？其課表也會一併被移除。')) return;
+        try {
+            const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
+            if (res.ok) {
+                const select = document.getElementById('user-select');
+                if (select.value == id) select.value = "";
+                refreshData();
+            }
+        } catch (err) {
+            alert('刪除失敗');
+        }
+    }
+
+    // 當切換選單或資料更新時，載入並渲染表格狀態
+    function loadUserSchedule() {
+        const userId = document.getElementById('user-select').value;
+        const saveBtn = document.getElementById('save-btn');
+        const hint = document.getElementById('table-hint');
+        
+        if (userId) {
+            // --- 個人編輯模式 ---
+            saveBtn.style.display = 'inline-block';
+            hint.innerText = "提示：點擊下方格子可自由切換您的狀態（綠：空堂，紅：這節有課）。別忘了點選儲存！";
+            
+            // 初始化或複製這名用戶在雲端的課表
+            currentLocalSchedule = {};
+            for (let d = 1; d <= DAYS; d++) {
+                currentLocalSchedule[d] = {};
+                for (let p = 1; p <= PERIODS; p++) {
+                    // 若雲端有紀錄就讀取，沒有預設為 0 (0代表空堂，1代表有課忙碌)
+                    const cloudStatus = (allSchedules[userId] && allSchedules[userId][d]) ? allSchedules[userId][d][p] : 0;
+                    currentLocalSchedule[d][p] = cloudStatus;
+                }
+            }
+            
+            // 渲染個人畫面
+            for (let d = 1; d <= DAYS; d++) {
+                for (let p = 1; p <= PERIODS; p++) {
+                    const cell = document.getElementById(`cell-${d}-${p}`);
+                    if (currentLocalSchedule[d][p] === 1) {
+                        cell.className = 'selectable busy';
+                        cell.innerText = '有課';
+                    } else {
+                        cell.className = 'selectable free';
+                        cell.innerText = '空堂';
+                    }
+                }
+            }
+        } else {
+            // --- 團隊綜合媒合總覽模式 ---
+            saveBtn.style.display = 'none';
+            hint.innerText = "目前為【總覽模式】：格子內顯示的數字為該節「有課的總人數」。數字為 0 (純綠色) 代表大家都沒課，是完美的聚會時間！";
+            
+            for (let d = 1; d <= DAYS; d++) {
+                for (let p = 1; p <= PERIODS; p++) {
+                    let busyCount = 0;
+                    // 計算此時段有幾個人在忙
+                    allUsers.forEach(user => {
+                        if (allSchedules[user.id] && allSchedules[user.id][d] && allSchedules[user.id][d][p] === 1) {
+                            busyCount++;
+                        }
+                    });
+                    
+                    const cell = document.getElementById(`cell-${d}-${p}`);
+                    cell.innerText = `${busyCount} 人有課`;
+                    
+                    if (allUsers.length === 0) {
+                        cell.className = 'selectable free';
+                        cell.style.backgroundColor = '#2ecc71';
+                    } else {
+                        // 依據忙碌比例計算顏色深淺 (越多人忙，顏色越往紅色靠攏)
+                        const ratio = busyCount / allUsers.length;
+                        if (ratio === 0) {
+                            cell.className = 'selectable free';
+                            cell.style.backgroundColor = '#2ecc71'; // 純空堂綠
+                        } else if (ratio === 1) {
+                            cell.className = 'selectable busy';
+                            cell.style.backgroundColor = '#e74c3c'; // 全員忙碌紅
+                        } else {
+                            cell.className = 'selectable';
+                            // 混合橘黃色調
+                            cell.style.backgroundColor = `rgb(243, ${Math.floor(156 * (1 - ratio) + 50)}, 18)`;
+                            cell.style.color = 'white';
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 點擊格子切換狀態 (僅在個人編輯模式生效)
+    function toggleCell(day, period) {
+        const userId = document.getElementById('user-select').value;
+        if (!userId) return; // 總覽模式下點擊無效
+
+        const cell = document.getElementById(`cell-${day}-${period}`);
+        if (currentLocalSchedule[day][period] === 1) {
+            // 改為空堂
+            currentLocalSchedule[day][period] = 0;
+            cell.className = 'selectable free';
+            cell.innerText = '空堂';
+        } else {
+            // 改為有課
+            currentLocalSchedule[day][period] = 1;
+            cell.className = 'selectable busy';
+            cell.innerText = '有課';
+        }
+    }
+
+    // 儲存目前編輯的用戶課表到雲端
+    async function saveSchedule() {
+        const userId = document.getElementById('user-select').value;
+        if (!userId) return;
+        
+        try {
+            const res = await fetch('/api/schedules/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    userId: parseInt(userId),
+                    userSchedule: currentLocalSchedule
+                })
+            });
+            if (res.ok) {
+                alert('課表更新儲存成功！');
+                refreshData();
+            } else {
+                alert('儲存失敗');
+            }
+        } catch (err) {
+            alert('伺服器連線失敗');
+        }
+    }
+</script>
+
+</body>
 </html>
